@@ -87,6 +87,7 @@ We propose **MultiTalk** , a novel framework for audio-driven multi-person conve
 * May 29, 2025: We release the [project page](https://meigen-ai.github.io/multi-talk/) of **MultiTalk** 
 
 ## 🌐 Community  Works
+- [Replicate](https://replicate.com/zsxkib/multitalk): thank [zsxkib](https://github.com/zsxkib) for pushing MultiTalk to Replicate platform, try it! Please refer to [cog-MultiTalk](https://github.com/zsxkib/cog-MultiTalk) for details.
 - [Gradio Demo](https://github.com/MeiGen-AI/MultiTalk): thank [fffiloni](https://github.com/fffiloni) for developing this gradio demo on Hugging Face. Please refer to the [issue](https://github.com/MeiGen-AI/MultiTalk/issues/39) for details. 
 - [ComfyUI](https://github.com/kijai/ComfyUI-WanVideoWrapper/tree/multitalk): thank [kijai](https://github.com/kijai) for integrating MultiTalk into ComfyUI-WanVideoWrapper. [Rudra](https://github.com/Rudra-ai-coder) found something interesting that MultiTalk can be combined with Wanx T2V and VACE in the [issue](https://github.com/kijai/ComfyUI-WanVideoWrapper/issues/635). 
 - [Google Colab example](https://colab.research.google.com/drive/185OyRIpJDlpnRjhBRb7FnaRlq11BLZTa?usp=sharing), an exmaple for inference on A100 provided by [Braffolk](https://github.com/Braffolk).
