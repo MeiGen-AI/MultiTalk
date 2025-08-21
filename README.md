@@ -280,7 +280,7 @@ python generate_multitalk.py \
     --sample_steps 40 \
     --mode streaming \
     --use_teacache \
-    --save_file multi_long_exp
+    --save_file multi_long_kane
 ```
 ##### 2) Run with very low VRAM
 
