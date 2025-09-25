@@ -4,7 +4,7 @@
   <img src="assets/logo2.jpeg" alt="MultiTalk" width="240"/>
 </p>
 
-<h1>Let Them Talk: Audio-Driven Multi-Person Conversational Video Generation</h1>
+<h1>Let Them Talk: Audio-Driven Multi-Person Conversational Video Generation (NeurIPS 2025)</h1>
 
 
 [Zhe Kong*](https://scholar.google.com/citations?user=4X3yLwsAAAAJ&hl=zh-CN) · [Feng Gao*](https://scholar.google.com/citations?user=lFkCeoYAAAAJ) ·[Yong Zhang](https://yzhang2016.github.io/)<sup>&#9993;</sup> · [Zhuoliang Kang](https://scholar.google.com/citations?user=W1ZXjMkAAAAJ&hl=en) · [Xiaoming Wei](https://scholar.google.com/citations?user=JXV5yrZxj5MC&hl=zh-CN) · [Xunliang Cai](https://openreview.net/profile?id=~Xunliang_Cai1)  
