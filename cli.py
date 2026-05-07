@@ -368,7 +368,7 @@ def main() -> None:
     #             max_frames_num = max_frames_num + (4 - remainder)
     #     else:
     #         max_frames_num = 1000  # default for streaming when duration unknown
-    max_frames_num = 2000
+    max_frames_num = int(frames_estimated * 1.1) # 10% larger than estimated frames
 
     command = [
         sys.executable,
