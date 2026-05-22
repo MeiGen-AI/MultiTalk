@@ -1,0 +1,10 @@
+{
+    "prompt": "A confident representative speaks directly to the camera.",
+    "cond_image": "Input_outputs/input_files/sales_executive/executive.png",
+    "tts_audio": {
+        "text": "example",
+        "human1_voice": "weights/Kokoro-82M/voices/af_heart.pt"
+    },
+    "cond_audio": {}
+}
+

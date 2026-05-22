@@ -81,6 +81,12 @@ def _parse_args():
         help="How many frames to be generated in one clip. The number should be 4n+1"
     )
     parser.add_argument(
+        "--max_frames_num",
+        type=int,
+        default=None,
+        help="Maximum number of frames to generate (for streaming mode). If not provided, defaults to frame_num for clip mode or 1000 for streaming mode."
+    )
+    parser.add_argument(
         "--ckpt_dir",
         type=str,
         default=None,
@@ -252,9 +258,9 @@ def _parse_args():
     return args
 
 def custom_init(device, wav2vec):    
-    audio_encoder = Wav2Vec2Model.from_pretrained(wav2vec, local_files_only=True).to(device)
+    audio_encoder = Wav2Vec2Model.from_pretrained(wav2vec, local_files_only=True, attn_implementation="eager").to(device)
     audio_encoder.feature_extractor._freeze_parameters()
-    wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(wav2vec, local_files_only=True)
+    wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(wav2vec, local_files_only=True, attn_implementation="eager")
     return wav2vec_feature_extractor, audio_encoder
 
 def loudness_norm(audio_array, sr=16000, lufs=-23):
@@ -613,7 +619,7 @@ def generate(args):
         audio_guide_scale=args.sample_audio_guide_scale,
         seed=args.base_seed,
         offload_model=args.offload_model,
-        max_frames_num=args.frame_num if args.mode == 'clip' else 1000,
+        max_frames_num=args.max_frames_num if args.max_frames_num is not None else (args.frame_num if args.mode == 'clip' else 1000),
         color_correction_strength = args.color_correction_strength,
         extra_args=args,
         )

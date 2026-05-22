@@ -440,7 +440,7 @@ class MultiTalkPipeline:
                 continue
             full_audio_embs.append(full_audio_emb) 
         
-        assert len(full_audio_embs) == HUMAN_NUMBER, f"Aduio file not exists or length not satisfies frame nums."
+        assert len(full_audio_embs) == HUMAN_NUMBER, f"Aduio file {audio_embedding_paths} not exists or length not satisfies frame nums."
 
         # preprocess text embedding
         if n_prompt == "":

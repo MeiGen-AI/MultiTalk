@@ -1,5 +1,4 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-import os
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
@@ -11,29 +10,17 @@ from xfuser.core.distributed import (
 )
 import xformers.ops
 
-_DISABLE_FLASH_ATTN = os.getenv("WAN_DISABLE_FLASH_ATTN", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-
-if _DISABLE_FLASH_ATTN:
+try:
+    import flash_attn_interface
+    FLASH_ATTN_3_AVAILABLE = True
+except ModuleNotFoundError:
     FLASH_ATTN_3_AVAILABLE = False
-    FLASH_ATTN_2_AVAILABLE = False
-    print("Flash attention is disabled by WAN_DISABLE_FLASH_ATTN environment variable.")
-else:
-    try:
-        import flash_attn_interface
-        FLASH_ATTN_3_AVAILABLE = True
-    except ModuleNotFoundError:
-        FLASH_ATTN_3_AVAILABLE = False
 
-    try:
-        import flash_attn
-        FLASH_ATTN_2_AVAILABLE = True
-    except ModuleNotFoundError:
-        FLASH_ATTN_2_AVAILABLE = False
+try:
+    import flash_attn
+    FLASH_ATTN_2_AVAILABLE = True
+except ModuleNotFoundError:
+    FLASH_ATTN_2_AVAILABLE = False
 
 import warnings
 
@@ -41,7 +28,6 @@ __all__ = [
     'flash_attention',
     'attention',
 ]
-
 
 def flash_attention(
     q,
@@ -59,37 +45,66 @@ def flash_attention(
     version=None,
 ):
     """
-    q:              [B, Lq, Nq, C1].
-    k:              [B, Lk, Nk, C1].
-    v:              [B, Lk, Nk, C2]. Nq must be divisible by Nk.
-    q_lens:         [B].
-    k_lens:         [B].
-    dropout_p:      float. Dropout probability.
-    softmax_scale:  float. The scaling of QK^T before applying softmax.
-    causal:         bool. Whether to apply causal attention mask.
-    window_size:    (left right). If not (-1, -1), apply sliding window local attention.
-    deterministic:  bool. If True, slightly slower and uses more memory.
-    dtype:          torch.dtype. Apply when dtype of q/k/v is not float16/bfloat16.
+    Modified flash_attention with intelligent fallback for older/alternative GPUs.
+    Prioritizes: Flash Attention 3/2 > xformers > SDPA
     """
+    # --- FALLBACK: If Flash Attention is missing, use xformers or SDPA ---
+    if not (FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE):
+        # Try xformers fallback first (better than SDPA)
+        try:
+            q_in = q.transpose(1, 2).to(dtype)
+            k_in = k.transpose(1, 2).to(dtype)
+            v_in = v.transpose(1, 2).to(dtype)
+
+            if q_scale is not None:
+                q_in = q_in * q_scale
+
+            # Apply softmax scale to query if provided
+            if softmax_scale is not None:
+                # SDPA uses 1/sqrt(dim) scaling by default
+                default_scale = q_in.shape[-1] ** -0.5
+                q_in = q_in * (softmax_scale / default_scale)
+
+            # Use xformers memory efficient attention if available
+            out = xformers.ops.memory_efficient_attention(
+                q_in, k_in, v_in,
+                attn_bias=None,
+                op=None,
+            )
+            return out.contiguous().type(q.dtype)
+        except Exception as xf_err:
+            # Fall back to SDPA if xformers fails
+            warnings.warn(
+                f'xformers attention failed ({xf_err}), falling back to SDPA. '
+                'For better performance on RTX 4090/3090, install flash-attn: '
+                'pip install flash-attn'
+            )
+            q_in = q.transpose(1, 2).to(dtype)
+            k_in = k.transpose(1, 2).to(dtype)
+            v_in = v.transpose(1, 2).to(dtype)
+
+            if q_scale is not None:
+                q_in = q_in * q_scale
+
+            if softmax_scale is not None:
+                default_scale = q_in.shape[-1] ** -0.5
+                q_in = q_in * (softmax_scale / default_scale)
+
+            # SDPA has limited support for window_size, so log a warning
+            if window_size != (-1, -1):
+                warnings.warn('SDPA fallback does not support sliding window attention')
+
+            out = torch.nn.functional.scaled_dot_product_attention(
+                q_in, k_in, v_in,
+                dropout_p=dropout_p,
+                is_causal=causal
+            )
+            return out.transpose(1, 2).contiguous().type(q.dtype)
+    # ----------------------------------------------------------------
+
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
     assert q.device.type == 'cuda' and q.size(-1) <= 256
-
-    if not FLASH_ATTN_3_AVAILABLE and not FLASH_ATTN_2_AVAILABLE:
-        if q_lens is not None or k_lens is not None:
-            warnings.warn(
-                'Padding mask is disabled when using scaled_dot_product_attention. It can have a significant impact on performance.'
-            )
-        attn_mask = None
-
-        q_sdpa = q.transpose(1, 2).to(dtype)
-        k_sdpa = k.transpose(1, 2).to(dtype)
-        v_sdpa = v.transpose(1, 2).to(dtype)
-
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q_sdpa, k_sdpa, v_sdpa, attn_mask=attn_mask, is_causal=causal, dropout_p=dropout_p)
-
-        return out.transpose(1, 2).contiguous().type(q.dtype)
 
     # params
     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
@@ -167,6 +182,114 @@ def flash_attention(
     # output
     return x.type(out_dtype)
 
+# def flash_attention(
+#     q,
+#     k,
+#     v,
+#     q_lens=None,
+#     k_lens=None,
+#     dropout_p=0.,
+#     softmax_scale=None,
+#     q_scale=None,
+#     causal=False,
+#     window_size=(-1, -1),
+#     deterministic=False,
+#     dtype=torch.bfloat16,
+#     version=None,
+# ):
+#     """
+#     q:              [B, Lq, Nq, C1].
+#     k:              [B, Lk, Nk, C1].
+#     v:              [B, Lk, Nk, C2]. Nq must be divisible by Nk.
+#     q_lens:         [B].
+#     k_lens:         [B].
+#     dropout_p:      float. Dropout probability.
+#     softmax_scale:  float. The scaling of QK^T before applying softmax.
+#     causal:         bool. Whether to apply causal attention mask.
+#     window_size:    (left right). If not (-1, -1), apply sliding window local attention.
+#     deterministic:  bool. If True, slightly slower and uses more memory.
+#     dtype:          torch.dtype. Apply when dtype of q/k/v is not float16/bfloat16.
+#     """
+#     half_dtypes = (torch.float16, torch.bfloat16)
+#     assert dtype in half_dtypes
+#     assert q.device.type == 'cuda' and q.size(-1) <= 256
+
+#     # params
+#     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
+
+#     def half(x):
+#         return x if x.dtype in half_dtypes else x.to(dtype)
+
+#     # preprocess query
+#     if q_lens is None:
+#         q = half(q.flatten(0, 1))
+#         q_lens = torch.tensor(
+#             [lq] * b, dtype=torch.int32).to(
+#                 device=q.device, non_blocking=True)
+#     else:
+#         q = half(torch.cat([u[:v] for u, v in zip(q, q_lens)]))
+
+#     # preprocess key, value
+#     if k_lens is None:
+#         k = half(k.flatten(0, 1))
+#         v = half(v.flatten(0, 1))
+#         k_lens = torch.tensor(
+#             [lk] * b, dtype=torch.int32).to(
+#                 device=k.device, non_blocking=True)
+#     else:
+#         k = half(torch.cat([u[:v] for u, v in zip(k, k_lens)]))
+#         v = half(torch.cat([u[:v] for u, v in zip(v, k_lens)]))
+
+#     q = q.to(v.dtype)
+#     k = k.to(v.dtype)
+
+#     if q_scale is not None:
+#         q = q * q_scale
+
+#     if version is not None and version == 3 and not FLASH_ATTN_3_AVAILABLE:
+#         warnings.warn(
+#             'Flash attention 3 is not available, use flash attention 2 instead.'
+#         )
+
+#     # apply attention
+#     if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+#         # Note: dropout_p, window_size are not supported in FA3 now.
+#         x = flash_attn_interface.flash_attn_varlen_func(
+#             q=q,
+#             k=k,
+#             v=v,
+#             cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
+#                 0, dtype=torch.int32).to(q.device, non_blocking=True),
+#             cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
+#                 0, dtype=torch.int32).to(q.device, non_blocking=True),
+#             seqused_q=None,
+#             seqused_k=None,
+#             max_seqlen_q=lq,
+#             max_seqlen_k=lk,
+#             softmax_scale=softmax_scale,
+#             causal=causal,
+#             deterministic=deterministic)[0].unflatten(0, (b, lq))
+#     else:
+#         assert FLASH_ATTN_2_AVAILABLE
+#         x = flash_attn.flash_attn_varlen_func(
+#             q=q,
+#             k=k,
+#             v=v,
+#             cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
+#                 0, dtype=torch.int32).to(q.device, non_blocking=True),
+#             cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
+#                 0, dtype=torch.int32).to(q.device, non_blocking=True),
+#             max_seqlen_q=lq,
+#             max_seqlen_k=lk,
+#             dropout_p=dropout_p,
+#             softmax_scale=softmax_scale,
+#             causal=causal,
+#             window_size=window_size,
+#             deterministic=deterministic).unflatten(0, (b, lq))
+
+#     # output
+#     return x.type(out_dtype)
+
 
 def attention(
     q,
@@ -200,21 +323,44 @@ def attention(
             version=fa_version,
         )
     else:
-        if q_lens is not None or k_lens is not None:
-            warnings.warn(
-                'Padding mask is disabled when using scaled_dot_product_attention. It can have a significant impact on performance.'
+        # Fallback: use xformers first, then SDPA
+        try:
+            q_t = q.transpose(1, 2).to(dtype)
+            k_t = k.transpose(1, 2).to(dtype)
+            v_t = v.transpose(1, 2).to(dtype)
+
+            if q_scale is not None:
+                q_t = q_t * q_scale
+
+            out = xformers.ops.memory_efficient_attention(
+                q_t, k_t, v_t,
+                attn_bias=None,
+                op=None,
             )
-        attn_mask = None
+            return out.contiguous().type(q.dtype)
+        except Exception as xf_err:
+            # Final fallback to SDPA
+            warnings.warn(
+                f'xformers attention failed ({xf_err}), falling back to SDPA. '
+                'For better performance on RTX 4090/3090, install flash-attn: '
+                'pip install flash-attn'
+            )
+            if q_lens is not None or k_lens is not None:
+                warnings.warn(
+                    'Padding mask is disabled with SDPA fallback. '
+                    'This can significantly impact performance.'
+                )
+            
+            attn_mask = None
+            q_t = q.transpose(1, 2).to(dtype)
+            k_t = k.transpose(1, 2).to(dtype)
+            v_t = v.transpose(1, 2).to(dtype)
 
-        q = q.transpose(1, 2).to(dtype)
-        k = k.transpose(1, 2).to(dtype)
-        v = v.transpose(1, 2).to(dtype)
+            out = torch.nn.functional.scaled_dot_product_attention(
+                q_t, k_t, v_t, attn_mask=attn_mask, is_causal=causal, dropout_p=dropout_p)
 
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, is_causal=causal, dropout_p=dropout_p)
-
-        out = out.transpose(1, 2).contiguous()
-        return out
+            out = out.transpose(1, 2).contiguous()
+            return out
     
 
 class SingleStreamAttention(nn.Module):

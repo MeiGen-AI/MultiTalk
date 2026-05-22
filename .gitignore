@@ -1,0 +1,5 @@
+__pycache__/
+weights/
+local_data/
+save_audio/
+.vscode/
